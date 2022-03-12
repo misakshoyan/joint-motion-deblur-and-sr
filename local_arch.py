@@ -2,7 +2,11 @@
 # Copyright (c) 2021 megvii-model. All Rights Reserved.
 # ------------------------------------------------------------------------
 """
-## Revisiting Global Statistics Aggregation for Improving Image Restoration
+## Single Image Joint Motion Deblurring and Super-Resolution
+## Using the Multi-Scale Channel Attention Modules
+## Misak Shoyan
+##
+## Based on TLSC: Revisiting Global Statistics Aggregation for Improving Image Restoration
 ## Xiaojie Chu, Liangyu Chen, Chengpeng Chen, Xin Lu
 """
 import torch

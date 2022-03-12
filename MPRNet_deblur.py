@@ -1,10 +1,5 @@
 """
-## Single Image Joint Motion Deblurring and Super-Resolution
-## Using the Multi-Scale Channel Attention Modules
-## Misak Shoyan
-##
-##
-## Based on 'Multi-Stage Progressive Image Restoration'
+## Multi-Stage Progressive Image Restoration
 ## Syed Waqas Zamir, Aditya Arora, Salman Khan, Munawar Hayat, Fahad Shahbaz Khan, Ming-Hsuan Yang, and Ling Shao
 ## https://arxiv.org/abs/2102.02808
 """
@@ -14,82 +9,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from pdb import set_trace as stx
 
-# 1) adjusted the architecture of ORSNET to the MPRNet provided in NTIRE 2021
-# 2) added SR Module with 170 RMS_CAB blocks, added residual connections + conv in ResidualGroup_RMS_CABs
-#
+# adjusted the architecture of ORSNET to the MPRNet provided in NTIRE 2021
 
 ##########################################################################
 def conv(in_channels, out_channels, kernel_size, bias=False, stride = 1):
     return nn.Conv2d(
         in_channels, out_channels, kernel_size,
         padding=(kernel_size//2), bias=bias, stride = stride)
-
-
-
-# As in EDPN (Enhanced Deep Pyramid Network for Blurry Image Restoration).
-# Added residual connections + conv in ResidualGroup_RMS_CABs.
-class MS_CAM(nn.Module):
-
-    def __init__(self, channels=64, r=4, bias=False):
-        super(MS_CAM, self).__init__()
-        inter_channels = int(channels // r)
-
-        self.local_att = nn.Sequential(
-            nn.Conv2d(channels, inter_channels, kernel_size=1, stride=1, padding=0, bias=bias),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(inter_channels, channels, kernel_size=1, stride=1, padding=0, bias=bias),
-        )
-
-        self.global_att = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(channels, inter_channels, kernel_size=1, stride=1, padding=0, bias=bias),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(inter_channels, channels, kernel_size=1, stride=1, padding=0, bias=bias),
-        )
-
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
-        xl = self.local_att(x)
-        xg = self.global_att(x)
-        xlg = xl + xg
-        wei = self.sigmoid(xlg)
-        return x * wei
-
-## Residual Multi-Scale Channel Attetnion Module (RMS_CAM)
-class RCAB_MSCAM(nn.Module):
-    def __init__(
-            self, n_feat=64, kernel_size=3, reduction=8,
-            bias=False, bn=False, act=nn.ReLU(), res_scale=1):
-
-        super(RCAB_MSCAM, self).__init__()
-        modules_body = []
-        for i in range(2):
-            modules_body.append(nn.Conv2d(n_feat, n_feat, kernel_size, padding=(kernel_size//2), bias=bias))
-            if bn: modules_body.append(nn.BatchNorm2d(n_feat))
-            if i == 0: modules_body.append(act)
-        modules_body.append(MS_CAM(n_feat, reduction))
-        self.body = nn.Sequential(*modules_body)
-        self.res_scale = res_scale
-
-    def forward(self, x):
-        res = self.body(x)
-        res += x
-        return res
-
-# Residual Group with RMS_CAMs (ResidualGroup_RMS_CAB)
-class ResidualGroup_RCAB_MSCAM(nn.Module):
-    def __init__(self, n_resblocks, n_feat=64, kernel_size=3, bias=False):
-        super(ResidualGroup_RCAB_MSCAM, self).__init__()
-        modules_body = []
-        modules_body = [RCAB_MSCAM() for _ in range(n_resblocks)]
-        modules_body.append(conv(n_feat, n_feat, kernel_size, bias=bias))
-        self.body = nn.Sequential(*modules_body)
-
-    def forward(self, x):
-        res = self.body(x)
-        res += x
-        return res
 
 
 ##########################################################################
@@ -109,7 +35,6 @@ class CALayer(nn.Module):
 
     def forward(self, x):
         y = self.avg_pool(x)
-        # print(y.shape)
         y = self.conv_du(y)
         return x * y
 
@@ -120,12 +45,9 @@ class CAB(nn.Module):
     def __init__(self, n_feat, kernel_size, reduction, bias, act):
         super(CAB, self).__init__()
         modules_body = []
-
-        # ResBlock
         modules_body.append(conv(n_feat, n_feat, kernel_size, bias=bias))
         modules_body.append(act)
         modules_body.append(conv(n_feat, n_feat, kernel_size, bias=bias))
-        ###
 
         self.CA = CALayer(n_feat, reduction, bias=bias)
         self.body = nn.Sequential(*modules_body)
@@ -340,42 +262,6 @@ class MPRNet(nn.Module):
         self.concat23  = conv(n_feat*2, n_feat+scale_orsnetfeats, kernel_size, bias=bias)
         self.tail     = conv(n_feat+scale_orsnetfeats, out_c, kernel_size, bias=bias)
 
-        ################################
-        # Feature Transformation Module
-        self.SRNet_sr_cab = CAB(n_feat + scale_orsnetfeats, kernel_size, reduction, bias=bias, act=act)
-        self.SRNet_before_rec = nn.Sequential(conv(n_feat+scale_orsnetfeats, 64, kernel_size, bias=bias),
-                                                   act)
-        ################################
-
-        ###############################################################
-        #### Super-Resolution Module
-        self.lrelu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
-        self.SRNet_HRconv = nn.Conv2d(64, 64, 3, 1, 1, bias=False)
-
-        self.SRNet_reconstructor1 = ResidualGroup_RCAB_MSCAM(n_resblocks=10)
-        self.SRNet_reconstructor2 = ResidualGroup_RCAB_MSCAM(n_resblocks=10)
-        self.SRNet_reconstructor3 = ResidualGroup_RCAB_MSCAM(n_resblocks=10)
-        self.SRNet_reconstructor4 = ResidualGroup_RCAB_MSCAM(n_resblocks=10)
-        self.SRNet_reconstructor5 = ResidualGroup_RCAB_MSCAM(n_resblocks=10)
-        self.SRNet_reconstructor6 = ResidualGroup_RCAB_MSCAM(n_resblocks=10)
-        self.SRNet_reconstructor7 = ResidualGroup_RCAB_MSCAM(n_resblocks=10)
-        self.SRNet_reconstructor8 = ResidualGroup_RCAB_MSCAM(n_resblocks=10)
-        self.SRNet_reconstructor9 = ResidualGroup_RCAB_MSCAM(n_resblocks=10)
-        self.SRNet_reconstructor10 = ResidualGroup_RCAB_MSCAM(n_resblocks=10)
-        self.SRNet_reconstructor11 = ResidualGroup_RCAB_MSCAM(n_resblocks=10)
-        self.SRNet_reconstructor12 = ResidualGroup_RCAB_MSCAM(n_resblocks=10)
-        self.SRNet_reconstructor13 = ResidualGroup_RCAB_MSCAM(n_resblocks=10)
-        self.SRNet_reconstructor14 = ResidualGroup_RCAB_MSCAM(n_resblocks=10)
-        self.SRNet_reconstructor15 = ResidualGroup_RCAB_MSCAM(n_resblocks=10)
-        self.SRNet_reconstructor16 = ResidualGroup_RCAB_MSCAM(n_resblocks=10)
-        self.SRNet_reconstructor17 = ResidualGroup_RCAB_MSCAM(n_resblocks=10)
-
-        self.SRNet_upscale = nn.Sequential(
-            nn.Conv2d(64, 64 * 4 ** 2, 1, 1, 0, bias=bias),
-            nn.PixelShuffle(4),
-            nn.Conv2d(64, 3, 3, 1, 1, bias=bias))
-        ###############################################################
-
     def forward(self, x3_img):
         # Original-resolution Image for Stage 3
         H = x3_img.size(2)
@@ -459,34 +345,7 @@ class MPRNet(nn.Module):
         x3_orsnet = self.stage3_orsnet(x3_cat, feat2, res2)
         res = x3_cat + x3_orsnet
 
-        stage3_img = self.tail(res)
+        stage3_img = self.tail(res) # like N_additional in CNLRN
 
-        # res = self.sr_cab(self.before_reconstruction(res))
-        res = self.SRNet_before_rec(self.SRNet_sr_cab(res))
-        res_mprnet = res
 
-        ###########################################################################################
-        res = self.SRNet_reconstructor1(res)
-        res = self.SRNet_reconstructor2(res)
-        res = self.SRNet_reconstructor3(res)
-        res = self.SRNet_reconstructor4(res)
-        res = self.SRNet_reconstructor5(res)
-        res = self.SRNet_reconstructor6(res)
-        res = self.SRNet_reconstructor7(res)
-        res = self.SRNet_reconstructor8(res)
-        res = self.SRNet_reconstructor9(res)
-        res = self.SRNet_reconstructor10(res)
-        res = self.SRNet_reconstructor11(res)
-        res = self.SRNet_reconstructor12(res)
-        res = self.SRNet_reconstructor13(res)
-        res = self.SRNet_reconstructor14(res)
-        res = self.SRNet_reconstructor15(res)
-        res = self.SRNet_reconstructor16(res)
-        res = self.SRNet_reconstructor17(res)
-
-        res = res + res_mprnet
-
-        res = self.lrelu(self.SRNet_HRconv(res))
-        res = self.SRNet_upscale(res)
-
-        return [stage3_img, stage2_img, stage1_img], res
+        return [stage3_img, stage2_img, stage1_img]

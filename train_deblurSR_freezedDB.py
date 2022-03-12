@@ -45,22 +45,17 @@ val_dir   = opt.TRAINING.VAL_DIR
 model_restoration = MPRNet()
 model_restoration.cuda()
 
-# for name, para in model_restoration.named_parameters():
-#     if name == "stage3_orsnet.orb2.body.8.weight":
-#         print(name)
-#         print(para)
 
-
-# not resume, just load another model weights.
-# !!! comment these 2 lines after load
 path_chk_rest1 = utils.get_last_path(model_dir, '_latest.pth')
 utils.load_checkpoint(model_restoration, path_chk_rest1)
 
-# print("******************************")
-# for name, para in model_restoration.named_parameters():
-#     if name == "stage3_orsnet.orb2.body.8.weight":
-#         print(name)
-#         print(para)
+for k, v in model_restoration.named_parameters():
+    if v.requires_grad:
+        if 'SRNet_' not in k:
+            print("Grad=False: ", k)
+            v.requires_grad = False
+        else:
+            print("Grad=True: ", k)
 
 
 device_ids = [i for i in range(torch.cuda.device_count())]
@@ -84,40 +79,23 @@ if start_lr_deblur > 0:
                 print("SR: ", k)
         else:
             print('Warning: Params [{:s}] will not optimize.'.format(k))
+
     optim_params = [
-        {  # add deblur params first
-            'params': predeblur_params,
-            'lr': start_lr_deblur
-        },
         {
             'params': sr_params,
             'lr': start_lr
-        },
+        }
     ]
+    # print("optimizing only this params: ", optim_params)
     optimizer = optim.Adam(optim_params, lr=start_lr, betas=(0.9, 0.999), eps=1e-8)
 else:
     optimizer = optim.Adam(model_restoration.parameters(), lr=start_lr, betas=(0.9, 0.999), eps=1e-8)
 print("LR_INITIAL = ", start_lr)
-print("LR_INITIAL_DB = ", start_lr_deblur)
+# print("LR_INITIAL_DB = ", start_lr_deblur)
 print("LR_MIN = ", opt.OPTIM.LR_MIN)
 
 
-
-######### Scheduler ###########
-# warmup_epochs = 3
-# scheduler_cosine = optim.lr_scheduler.CosineAnnealingLR(optimizer, opt.OPTIM.NUM_EPOCHS-warmup_epochs, eta_min=opt.OPTIM.LR_MIN)
 scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, opt.OPTIM.NUM_EPOCHS, eta_min=opt.OPTIM.LR_MIN)
-# scheduler = GradualWarmupScheduler(optimizer, multiplier=1, total_epoch=warmup_epochs, after_scheduler=scheduler_cosine)
-# scheduler.step()
-
-# test the scheduler
-# for i in range(opt.OPTIM.NUM_EPOCHS):
-#     print("i: {}  lr: {}".format(i, scheduler_cosine.get_lr()[0]))
-#     scheduler_cosine.step()
-#
-# import sys
-# print("exiting")
-# sys.exit(0)
 
 ######### Resume ###########
 if opt.TRAINING.RESUME:
@@ -125,40 +103,51 @@ if opt.TRAINING.RESUME:
     utils.load_checkpoint(model_restoration,path_chk_rest)
     start_epoch = utils.load_start_epoch(path_chk_rest) + 1
     utils.load_optim(optimizer, path_chk_rest)
-    print ("loaded start lr deblur = ", optimizer.param_groups[0]['lr'])
-    print("loaded start lr SR = ", optimizer.param_groups[1]['lr'])
-    optimizer.param_groups[0]['lr'] = start_lr_deblur
-    optimizer.param_groups[1]['lr'] = start_lr
-    print ("after reset start lr deblur = ", optimizer.param_groups[0]['lr'])
-    print("after reset start lr SR = ", optimizer.param_groups[1]['lr'])
+
+    for k, v in model_restoration.named_parameters():
+        if v.requires_grad:
+            if 'SRNet_' not in k:
+                print("Grad=False: ", k)
+                v.requires_grad = False
+            else:
+                print("Grad=True: ", k)
+
+    for k, v in model_restoration.named_parameters():
+        if not v.requires_grad:
+            print('Warning: Params [{:s}] will not optimize.'.format(k))
+
+    print ("loaded start lr = ", optimizer.param_groups[0]['lr'])
+    # print("loaded start lr SR = ", optimizer.param_groups[1]['lr'])
+    optimizer.param_groups[0]['lr'] = start_lr
+    # optimizer.param_groups[1]['lr'] = start_lr
+    print ("after reset start lr = ", optimizer.param_groups[0]['lr'])
+    # print("after reset start lr SR = ", optimizer.param_groups[1]['lr'])
 
     print("start epoch = ", start_epoch)
 
     for i in range(1, start_epoch): # start_epoch-1???
         scheduler.step()
     # start_epoch = 1
-    start_lr_deblur = scheduler.get_last_lr()[0]
-    start_lr = scheduler.get_last_lr()[1]
-    print("after step scheduler_lr_deblur = ", start_lr_deblur)
-    print("after step scheduler_lr_SR = ", start_lr)
+    start_lr = scheduler.get_last_lr()[0]
+    # start_lr = scheduler.get_last_lr()[1]
+    print("after step scheduler_lr = ", start_lr)
+    # print("after step scheduler_lr_SR = ", start_lr)
 
-    print("after step optimizer_lr(deblur) = ", optimizer.param_groups[0]['lr'])
-    print("after step optimizer_lr(SR) = ", optimizer.param_groups[1]['lr'])
+    print("after step optimizer_lr = ", optimizer.param_groups[0]['lr'])
+    # print("after step optimizer_lr(SR) = ", optimizer.param_groups[1]['lr'])
 
     print('------------------------------------------------------------------------------')
     print("==> Resuming Training with:")
-    print("-- learning rate deblur:", start_lr_deblur)
-    print("-- learning rate SR:", start_lr)
+    print("-- learning rate:", start_lr)
+    # print("-- learning rate SR:", start_lr)
     print('------------------------------------------------------------------------------')
 
 if len(device_ids)>1:
     model_restoration = nn.DataParallel(model_restoration, device_ids = device_ids)
 
 ######### Loss ###########
-criterion_char = losses.CharbonnierLoss()
-criterion_edge = losses.EdgeLoss()
-# criterion_sr = torch.nn.MSELoss(size_average=True)
-# criterion_sr = criterion_sr.cuda()
+# criterion_char = losses.CharbonnierLoss()
+# criterion_edge = losses.EdgeLoss()
 criterion_l1 = torch.nn.L1Loss().to('cuda')
 criterion_grad = losses.Gradient_Loss(device='cuda').to('cuda')
 
@@ -188,12 +177,12 @@ for epoch in range(start_epoch, opt.OPTIM.NUM_EPOCHS + 1):
     restored_dbs = None
     restored_sr = None
 
-    writer.add_scalar('learning_rate deblur', scheduler.get_last_lr()[0], epoch)
-    writer.add_scalar('learning_rate SR', scheduler.get_last_lr()[1], epoch)
+    # writer.add_scalar('learning_rate deblur', scheduler.get_last_lr()[0], epoch)
+    writer.add_scalar('learning_rate SR', scheduler.get_last_lr()[0], epoch)
 
     model_restoration.train()
     for i, data in enumerate(tqdm(train_loader), 0):
-        # if i == 25:
+        # if i == 51:
         #     break
         # zero_grad
         for param in model_restoration.parameters():
@@ -214,16 +203,21 @@ for epoch in range(start_epoch, opt.OPTIM.NUM_EPOCHS + 1):
 
 
         # Compute loss at each stage
-        loss_char = criterion_char(restored_dbs[1],target_db) + criterion_char(restored_dbs[2],target_db)
+        # loss_char = criterion_char(restored_dbs[1],target_db) + criterion_char(restored_dbs[2],target_db)
+        # print(loss_char)
 
-        loss_edge = criterion_edge(restored_dbs[1],target_db) + criterion_edge(restored_dbs[2],target_db)
+        # loss_edge = criterion_edge(restored_dbs[1],target_db) + criterion_edge(restored_dbs[2],target_db)
+        # print("loss_Edge: ", loss_edge)
 
         loss_l1 = criterion_l1(restored_sr, target_hr)
         loss_grad = criterion_grad(restored_sr, target_hr)
         loss_sr = loss_l1 + (0.1*loss_grad)
+        # print("Loss_sr: ", loss_sr)
 
-        loss_db = 0.5 * (loss_char + (0.05 * loss_edge))
-        loss = loss_db + loss_sr
+        # loss_db = 0.5 * (loss_char + (0.05 * loss_edge))
+        # loss = loss_db + loss_sr
+        loss = loss_sr
+        # print(loss)
 
         loss.backward()
         optimizer.step()
@@ -232,12 +226,12 @@ for epoch in range(start_epoch, opt.OPTIM.NUM_EPOCHS + 1):
 
         if i % 50 == 0:
             writer.add_scalar('Loss/train', loss.item(), (epoch - 1)*len(train_loader) + i)
-            writer.add_scalar('Loss_db/train', loss_db.item(), (epoch - 1) * len(train_loader) + i)
+            # writer.add_scalar('Loss_db/train', loss_db.item(), (epoch - 1) * len(train_loader) + i)
             writer.add_scalar('Loss_sr/train', loss_sr.item(), (epoch - 1) * len(train_loader) + i)
             writer.add_scalar('Loss_l1/train', loss_l1.item(), (epoch - 1) * len(train_loader) + i)
             writer.add_scalar('Loss_grad/train', loss_grad.item(), (epoch - 1) * len(train_loader) + i)
-            writer.add_scalar('Loss_edge/train', loss_edge.item(), (epoch - 1) * len(train_loader) + i)
-            writer.add_scalar('Loss_char/train', loss_char.item(), (epoch - 1) * len(train_loader) + i)
+            # writer.add_scalar('Loss_edge/train', loss_edge.item(), (epoch - 1) * len(train_loader) + i)
+            # writer.add_scalar('Loss_char/train', loss_char.item(), (epoch - 1) * len(train_loader) + i)
 
     epoch_loss /= len(train_loader)
 
@@ -294,13 +288,8 @@ for epoch in range(start_epoch, opt.OPTIM.NUM_EPOCHS + 1):
     scheduler.step()
 
     print("------------------------------------------------------------------")
-    print("Epoch: {}\tTime: {:.4f}\tLoss: {:.4f}\tLearningRate_DB {:.6f}\tLearningRate_SR {:.6f}".format(
-           epoch, time.time()-epoch_start_time, epoch_loss, scheduler.get_last_lr()[0], scheduler.get_last_lr()[1]))
+    print("Epoch: {}\tTime: {:.4f}\tLoss: {:.6f}\tLearningRate_SR {:.6f}".format(
+           epoch, time.time()-epoch_start_time, epoch_loss, scheduler.get_last_lr()[0]))
     print("------------------------------------------------------------------")
-
-    # torch.save({'epoch': epoch,
-    #             'state_dict': model_restoration.state_dict(),
-    #             'optimizer' : optimizer.state_dict()
-    #             }, os.path.join(model_dir,"model_latest.pth"))
 
 writer.close()

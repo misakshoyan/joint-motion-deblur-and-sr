@@ -1,5 +1,10 @@
 """
-## Multi-Stage Progressive Image Restoration
+## Single Image Joint Motion Deblurring and Super-Resolution
+## Using the Multi-Scale Channel Attention Modules
+## Misak Shoyan
+##
+##
+## Based on 'Multi-Stage Progressive Image Restoration'
 ## Syed Waqas Zamir, Aditya Arora, Salman Khan, Munawar Hayat, Fahad Shahbaz Khan, Ming-Hsuan Yang, and Ling Shao
 ## https://arxiv.org/abs/2102.02808
 """
@@ -26,6 +31,7 @@ from torchvision.utils import make_grid
 
 # starter, ender = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
 
+# self-ensemble strategy as in CNLRN
 def flipx8_forward(model, inp):
     """Flip testing with X8 self ensemble
     Args:
@@ -54,14 +60,11 @@ def flipx8_forward(model, inp):
         lr_list.extend([_transform(t, tf) for t in lr_list])
 
     with torch.no_grad():
-        # _, sr_list = [model(aug) for aug in lr_list]
-        # cnt = 0
         for aug in lr_list:
             # cnt = cnt+1
             dbs, sr = model(aug)
             sr_list.append(sr)
-    # print(cnt)
-        # sr_list = [model(aug) for aug in lr_list]
+
     for i in range(len(sr_list)):
         if i > 3:
             sr_list[i] = _transform(sr_list[i], 't')
@@ -76,7 +79,7 @@ def flipx8_forward(model, inp):
     output = output.data.float().cpu()
     return output
 
-
+# Used to calculate the PSNR/SSIM metrics as in CNLRN for fair comparison.
 def tensor2img(tensor, out_type=np.uint8, min_max=(0, 1)):
     '''
     Converts a torch Tensor into an image Numpy array
@@ -102,6 +105,9 @@ def tensor2img(tensor, out_type=np.uint8, min_max=(0, 1)):
         img_np = (img_np * 255.0).round()
         # Important. Unlike matlab, numpy.unit8() WILL NOT round by default.
     return img_np.astype(out_type)
+
+
+
 
 parser = argparse.ArgumentParser(description='Image Deblurring using MPRNet')
 
@@ -138,7 +144,6 @@ utils.mkdir(result_dir)
 
 psnr_all = 0
 ssim_all = 0
-upsample = nn.Upsample(scale_factor=4, mode='bicubic', align_corners=False)
 with torch.no_grad():
     for ii, data_test in enumerate(tqdm(test_loader), 0):
         torch.cuda.ipc_collect()
@@ -151,44 +156,25 @@ with torch.no_grad():
 
         if args.flip_test:
             restored = flipx8_forward(model_restoration, input_)
-            # print(restored)
-            # break
         else:
             restored_dbs, restored = model_restoration(input_)
-            # restored = upsample(input_)
-            # print(restored)
-            # break
 
         # ender.record()
         # torch.cuda.synchronize()
         # curr_time = starter.elapsed_time(ender)
         # print("ellapsed time on image: ", curr_time)
-        # psnr_score = utils.psnr(restored, target)
-        # # psnr_score = utils.psnr(restored_dbs[0], target)
-        # psnr_all += psnr_score
 
         restored2 = tensor2img(restored.squeeze(0))
         target2 = tensor2img(target.squeeze(0))
 
-        # restored = restored / 255.
-        # target = target / 255.
-
-        # psnr_score = utils.calculate_psnr(restored * 255, target * 255)
         psnr_score = utils.calculate_psnr(restored2, target2)
         psnr_all += psnr_score
 
-        # ssim_score = utils.ssim(restored * 255, target * 255)
         ssim_score = utils.ssim(restored2, target2)
         ssim_all += ssim_score
         print("PSNR/SSIM_{} = {:.4f}/{:.4f}".format(ii, psnr_score, ssim_score))
 
-
-        # print(ii)
         # print("restored1 PSNR: ", psnr_score)
-
-        # restored_dbs, restored = model_restoration(restored_dbs[0])
-        # psnr_score = utils.psnr(restored, target)
-        # print("restored2 PSNR: ", psnr_score)
 
         #####
         restored = torch.clamp(restored,0,1)

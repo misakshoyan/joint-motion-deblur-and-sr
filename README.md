@@ -62,7 +62,6 @@ The [REDS](https://seungjunnah.github.io/Datasets/reds.html) dataset is used to 
    cd dataset/val_sharp/val/val_sharp
    j=0;for i in */*.png; do cp "$i" ../../../validation/target/"$j".png; let j=j+1;done
    ```
-   Perform the same procedure for validation data.
    Val300 is already processed.
 4. Crop REDS validation images to be multiple of 8 since MPRNet relies on multi-patch encoder-decoder architecture (320x180 -> 320x176, 1280x720 -> 1280x704):
    ```

@@ -1,6 +1,6 @@
 # joint-motion-deblur-and-sr
 ## Single Image Joint Motion Deblurring and Super-Resolution Using the Multi-Scale Channel Attention Modules
-The paper is under review in the journal of [Mathematical Problems of Computer Science](http://mpcs.sci.am/index.php/mpcs)
+#### Paper: [https://mpcs.sci.am/index.php/mpcs/article/view/699](https://mpcs.sci.am/index.php/mpcs/article/view/699)
 
 ## Installation
 This repository is built in PyTorch 1.8.1 and tested on Ubuntu 18.04 environment.
